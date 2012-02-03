@@ -83,9 +83,9 @@ C    14 VP     : VITESSE DE P                                dp = p
 C
 C***************** DECLARATION DES VARIABLES LOCALES *******************
 C
-      INTEGER II
+      INTEGER II,ITER
       REAL*8  R8MIEM,DNRM2
-      REAL*8  R8MIN
+      REAL*8  R8MIN,ERRE
       REAL*8  ULEL(NBCOMP),DULEL(NBCOMP),UTLEL(NBCOMP)
       REAL*8  NORM,TMP,VTMP(NBCOMP)
       REAL*8  KY,FY,CI,N,FU
@@ -200,8 +200,10 @@ C     INITIALISATION R+ = R- (PREDICTION ELASTIQUE INITIALE)
 
 C     BOUCLE
       ERRE = 1.0D0
+      ITER = 0
 10    IF ( ERRE .GT. 1.0D-6 ) THEN
 
+         WRITE(6,*) "====== ITERATION #",ITER
 
 C
 C        5. DETERMINATION DU COMPORTEMENT PAR UNE PREDICTION ELASTIQUE
@@ -223,7 +225,7 @@ C        R = Ci.p/(1+(Ci.p/FU)^n)^(1/n)
 C        VALEUR DE LA FONCTION DE SURFACE DE CHARGE
 C        f = |F+| - R+ - Fy = |F+| - R- - Fy (elastique: R+=R-)
          NORM = DNRM2(NBCOMP, FP, 1) - RP(1)
-         WRITE(6,*) "Prediction elastique (R+ - R-):"
+         WRITE(6,*) "Prediction elastique (R+ = R-):"
          WRITE(6,*) "||F+|| - (R-) = ",NORM
          WRITE(6,*) "FY    = ",FY
 
@@ -246,51 +248,11 @@ C        dL = (|| Ky.dU + F- || - Fy - R+) / Ky
          CALL DAXPY(NBCOMP, KY, DULEL, 1, VTMP, 1)
          NORM = DNRM2(NBCOMP, VTMP, 1)
          VARIPL(14) = (NORM - FY - RP(1)) / KY
-!          DLNNEG = DLN
-!          DLNPOS = DLN
-!          FDLN = DINON11_FDL(DLN,NORM,KY,FY,CI,N,FU,R8MIN)
-!          FDLNNEG = FDLN
-!          FDLNPOS = FDLN
-!          WRITE(6,*) "F(dL) = ",FDLN
-!          II = 0
-! 10       IF ( ABS(FDLN) .GT. 1.0D-3 ) THEN
-!             FPDLN = DINON11_FPDL(DLN,NORM,KY,FY,CI,N,FU,R8MIN)
-!             WRITE(6,*) "F'(dL)= ",FPDLN
-!             DLNN = DLN - FDLN / FPDLN
-!             WRITE(6,*) "dLnn  = ",DLNN
-!             IF ( DLNN .LE. R8MIN ) THEN
-! !                DLN = 0.5D0 * (DLNNEG + DLNPOS)
-! !                WRITE(6,*) "correction with half!"
-!                DLN = FDLNNEG / (FDLNPOS - FDLNNEG)
-!                DLN = DLNNEG - (DLNPOS - DLNNEG) * DLN
-!                WRITE(6,*) "correction with secant!"
-!             ELSE
-!                DLN = DLNN
-!                WRITE(6,*) "normal prediction"
-!             ENDIF
-!             WRITE(6,*) "dLn   = ",DLN
-!             FDLN = DINON11_FDL(DLN,NORM,KY,FY,CI,N,FU,R8MIN)
-!             WRITE(6,*) "F(dL) = ",FDLN
-!             IF ( FDLN .GE. 0.0D0 ) THEN
-!                DLNPOS  = DLN
-!                FDLNPOS = FDLN
-!             ELSE
-!                DLNNEG  = DLN
-!                FDLNNEG = FDLN
-!             ENDIF
-!             II = II + 1
-!             IF ( II .LT. 1000 ) THEN
-!                GOTO 10
-!             ENDIF
-!          ENDIF
-!          VARIPL(14) = DLN
          WRITE(6,*) "dp    = ",VARIPL(14)
 
 C        CALCUL DE L'INCREMENT DE DEPLACEMENT PLASTIQUE
-C        dUpl = dLambda.df/dF = dLambda.F/||F|| (normale a 1 sphere)
-C        Note: en 1D la direction importe peu... pas en 3D!
-C              donc n = F+ / ||F+|| donne en 1D n = F- / ||F-||
-         CALL DCOPY(NBCOMP, FM, 1, VARIPL(7), 1)
+C        dUpl = dLambda.df/dF = dLambda.F+/||F+|| (normale a 1 sphere)
+         CALL DCOPY(NBCOMP, FP, 1, VARIPL(7), 1)
          NORM = DNRM2(NBCOMP, VARIPL(7), 1)
          CALL DSCAL(NBCOMP, VARIPL(14) / NORM, VARIPL(7), 1)
          WRITE(6,*) "dUpl  = ",VARIPL(7:8)
@@ -303,14 +265,14 @@ C        Upl+ = Upl- + dUpl
 
 C        CALCUL DE LA DEFORMATION PLASTIQUE CUMULEE p
 C        p+ = p- + dp = p- + dLambda
-         CALL DAXPY(NBCOMP, 1.0D0, VARIPL(14), 1, VARIPL(13), 1)
+         VARIPL(13) = VARIMO(13) + VARIPL(14)
          WRITE(6,*) "p+    = ",VARIPL(13)
 
 C        RAYON DE LA SURFACE DE CHARGE R+
 C        R = Ci.p/(1+(Ci.p/FU)^n)^(1/n)
          RP(1) = CI * VARIPL(13)
          RP(1) = RP(1) / ((1 + ((RP(1) / FU) ** N)) ** (1.0D0 / N))
-         WRITE(6,*) "R+    = ",RP(1)," (informative)"
+         WRITE(6,*) "R+    = ",RP(1)
 
 C        CALCUL DE dF
 C        dF = Ky.(dU - dUpl)
@@ -325,11 +287,19 @@ C        F+ = F- + dF = F- + Ky.dUel = F- + Ky.(dU - dUpl)
 
 C        CALCUL DE L'ERREUR
          NORM = DNRM2(NBCOMP, FP, 1)
-         ERRE = ABS(NORM - RP(1) - FY)
-         WRITE(6,*) "error = ",ERRE," = ||F+|| - R+ - Fy"
+!          ERRE = ABS(NORM - RP(1) - FY)
+!          WRITE(6,*) "error = ",ERRE," = ||F+|| - R+ - Fy"
+C        e = || R+ - R- ||
+         CALL DCOPY(NBCOMP, RP, 1, VTMP, 1)
+         CALL DAXPY(NBCOMP, -1.0D0, RM, 1, VTMP, 1)
+         ERRE = DNRM2(NBCOMP, VTMP, 1) + ABS(NORM - RP(1) - FY)
+         WRITE(6,*) "error = ",ERRE," = ||R+ - R-||"
 
-C        BOUCLE
-         GOTO 10
+C        BOUCLE AVEC CONTROLE DU NOMBRE D'ITERATIONS
+         ITER = ITER + 1
+         IF ( ITER .LT. 10 ) THEN
+           GOTO 10
+         ENDIF
       ENDIF
 
 C     CALCUL DE LA RAIDEUR TANGENTE
